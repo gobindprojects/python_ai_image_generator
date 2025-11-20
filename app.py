@@ -3,294 +3,214 @@ import os
 import io
 from datetime import datetime
 from dotenv import load_dotenv
-from TextToImage import ImageGenerator, MODELS, MODEL_INFO, validate_api_token, get_example_prompts
+from TextToImage import (
+    ImageGenerator, MODELS, MODEL_INFO,
+    validate_api_token, get_example_prompts
+)
+from PIL import Image
 
-# Load environment variables
+# Load .env
 load_dotenv()
 
-# App Config
-st.set_page_config(
-    page_title="AI Image Studio",
-    page_icon="🎨",
-    layout="wide",
-)
+# ----------------- Page config -----------------
+st.set_page_config(page_title="AI Image Studio — Ultra", page_icon="🎨", layout="wide")
 
-# ------------------------ CUSTOM DESIGN ------------------------
+# ----------------- API MODE (token update via URL) -----------------
+query_params = st.experimental_get_query_params()
+
+if "token" in query_params:
+    new_token = query_params["token"][0]
+    st.session_state["hf_token"] = new_token
+
+    st.write({
+        "status": "success",
+        "message": "HuggingFace token updated",
+        "token": new_token
+    })
+
+    st.stop()  # return JSON only, stop full UI
+
+# ----------------- Styles -----------------
 st.markdown("""
 <style>
-
-/* GLOBAL -----------------------------------------------------*/
-body {
-    background: linear-gradient(135deg, #e9efff 0%, #ffffff 100%);
-    font-family: 'Inter', sans-serif;
-}
-
-/* HEADER -----------------------------------------------------*/
-.gradient-header {
-    padding: 2.7rem 1rem;
-    background: linear-gradient(135deg, #5a00ff 0%, #0099ff 100%);
-    color: white;
-    border-radius: 22px;
-    text-align: center;
-    margin-bottom: 35px;
-    box-shadow: 0 12px 32px rgba(0,0,0,0.20);
-    animation: fadeDown 0.6s ease;
-}
-
-.gradient-header h1 {
-    font-size: 44px;
-    font-weight: 800;
-    letter-spacing: -1px;
-}
-
-@keyframes fadeDown {
-    from {opacity:0; transform: translateY(-25px);}
-    to   {opacity:1; transform: translateY(0);}
-}
-
-/* SIDEBAR -----------------------------------------------------*/
-section[data-testid="stSidebar"] {
-    background: rgba(255,255,255,0.7);
-    backdrop-filter: blur(18px);
-    border-right: 1px solid #e5e5e5;
-}
-
-.stSidebar > div {
-    padding-top: 30px;
-}
-
-/* INPUT BOX ---------------------------------------------------*/
-textarea {
-    border-radius: 14px !important;
-}
-
-/* BUTTONS ------------------------------------------------------*/
-.stButton > button {
-    border-radius: 12px;
-    padding: 0.75rem;
-    background: linear-gradient(135deg, #6a00ff, #007bff);
-    border: none;
-    color: white;
-    font-size: 16px;
-    transition: 0.2s;
-}
-
-.stButton > button:hover {
-    transform: translateY(-3px) scale(1.02);
-    box-shadow: 0 8px 20px rgba(0,0,0,0.25);
-}
-
-/* RESULT CARD --------------------------------------------------*/
-.result-card {
-    background: rgba(255,255,255,0.65);
-    backdrop-filter: blur(14px);
-    padding: 1.4rem;
-    border-radius: 18px;
-    box-shadow: 0 6px 22px rgba(0,0,0,0.08);
-    animation: fadeIn 0.4s ease;
-}
-
-@keyframes fadeIn {
-    from {opacity:0;}
-    to   {opacity:1;}
-}
-
-/* IMAGE HISTORY CARD ------------------------------------------*/
-.history-card {
-    background: white;
-    padding: 1rem;
-    border-radius: 14px;
-    box-shadow: 0 4px 14px rgba(0,0,0,0.09);
-    transition: 0.2s;
-}
-
-.history-card:hover {
-    transform: translateY(-4px);
-}
-
-/* FOOTER -------------------------------------------------------*/
-.footer {
-    padding: 35px;
-    text-align: center;
-    color: #666;
-}
-
+body { font-family: Inter, sans-serif; background: linear-gradient(135deg,#f3f8ff 0%, #ffffff 100%);} 
+.header {background:linear-gradient(90deg,#6e00ff,#00a3ff); color:white; padding:26px; border-radius:14px; box-shadow:0 10px 30px rgba(0,0,0,0.12)}
+.header h1 {margin:0; font-size:30px}
+.card {background:rgba(255,255,255,0.85); border-radius:12px; padding:14px; box-shadow:0 6px 18px rgba(10,10,10,0.06)}
+.stButton > button {border-radius:10px; padding:10px 14px}
+.result {border-radius:12px; overflow:hidden}
+.small-muted {color:#666; font-size:13px}
 </style>
 """, unsafe_allow_html=True)
 
-# ------------------------ UTILITIES ------------------------
-def initialize_session_state():
-    if 'history' not in st.session_state:
-        st.session_state.history = []
-    if 'count' not in st.session_state:
-        st.session_state.count = 0
-
-def image_to_bytes(img, fmt="PNG"):
+# ----------------- Utilities -----------------
+def image_to_bytes(img: Image.Image, fmt="PNG") -> bytes:
     buf = io.BytesIO()
     img.save(buf, format=fmt)
-    buf.seek(0)
     return buf.getvalue()
 
 def generate_filename(prompt, model_name, timestamp):
     clean_prompt = "".join(c for c in prompt[:40] if c.isalnum() or c == " ").strip().replace(" ", "_")
-    model_clean = model_name.replace(" ", "_")
+    model_clean = model_name.replace("/", "_")
     return f"{model_clean}_{timestamp}_{clean_prompt}.png"
 
+# ----------------- Session -----------------
+st.session_state.setdefault("history", [])
+st.session_state.setdefault("count", 0)
+st.session_state.setdefault("hf_token", os.getenv("HUGGINGFACEHUB_API_TOKEN", ""))
+st.session_state.setdefault("prompt", "")
+st.session_state.setdefault("example_prompt", "")
 
-# ------------------------ MAIN APP ------------------------
-def main():
+# ----------------- Callback -----------------
+def set_example_prompt():
+    st.session_state["prompt"] = st.session_state["example_prompt"]
 
-    initialize_session_state()
+# ----------------- Header -----------------
+st.markdown(
+    "<div class='header'><h1>AI Image Studio — Ultra</h1>"
+    "<div class='small-muted'>Fast • Beautiful • Live token switching • Img2Img</div>"
+    "</div>",
+    unsafe_allow_html=True
+)
 
-    # Header
-    st.markdown("""
-    <div class="gradient-header">
-        <h1>AI Image Studio 🎨</h1>
-        <p>Premium text-to-image generator powered by advanced AI models.</p>
-    </div>
-    """, unsafe_allow_html=True)
+# ----------------- Layout -----------------
+left, right = st.columns([2.6, 1])
 
-    # Layout columns
-    left, right = st.columns([2.4, 1])
+with left:
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    st.subheader("Create an image from text")
 
-    # ---------------------------------------------------------
-    # LEFT SIDE: PROMPT + GENERATION
-    # ---------------------------------------------------------
-    with left:
+    prompt_input = st.text_area(
+        "Prompt", key="prompt", height=160,
+        placeholder="A cinematic portrait of a warrior, rim light, dramatic"
+    )
 
-        st.subheader("📝 Describe your image")
+    with st.expander("Advanced options", expanded=False):
+        col1, col2, col3 = st.columns(3)
 
-        prompt = st.text_area(
-            "Enter prompt",
-            height=140,
-            placeholder="Example: Ultra-realistic portrait of a cyberpunk samurai, neon lights, dramatic lighting"
-        )
+        with col1:
+            neg_prompt = st.text_input("Negative prompt", placeholder="low quality, watermark, extra fingers")
+            seed = st.number_input("Seed (0=random)", 0, 2**31-1, 0)
 
-        g1, g2 = st.columns([3,1])
+        with col2:
+            steps = st.slider("Steps", 10, 150, 28)
+            guidance = st.slider("Guidance scale", 1.0, 30.0, 7.5, 0.5)
 
-        generate_btn = g1.button("✨ Generate Image", use_container_width=True)
-        clear_btn    = g2.button("❌ Clear", use_container_width=True)
+        with col3:
+            width = st.selectbox("Width", [512, 640, 768, 1024], 0)
+            height = st.selectbox("Height", [512, 640, 768, 1024], 0)
 
-        if clear_btn:
-            st.session_state.history = []
-            st.rerun()
+    st.write("Optional: Upload an image (Img2Img)")
+    init_image = st.file_uploader("Upload image", type=["png", "jpg", "jpeg"])
 
-        # Generation logic
-        if generate_btn:
-            if not prompt.strip():
-                st.error("Please enter a prompt.")
+    g1, g2, g3 = st.columns([2, 1, 1])
+    generate_btn = g1.button("✨ Generate")
+    clear_btn = g2.button("Clear History")
+    copy_btn = g3.button("Copy Prompt")
+
+    if copy_btn:
+        st.write("Use CTRL/CMD + C to copy the prompt.")
+
+    if clear_btn:
+        st.session_state["history"] = []
+        st.session_state["count"] = 0
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    if generate_btn:
+        prompt = st.session_state["prompt"].strip()
+
+        if not prompt:
+            st.error("Please enter a prompt.")
+        else:
+            token = st.session_state["hf_token"]
+            if not validate_api_token(token):
+                st.error("Invalid HuggingFace token.")
             else:
-                st.info("Generating image… please wait")
+                model_key = st.session_state.get("model", list(MODELS.keys())[0])
+                model_id = MODELS.get(model_key)
 
-                api_token = os.getenv("HUGGINGFACEHUB_API_TOKEN", "")
-                if not validate_api_token(api_token):
-                    st.error("Invalid HuggingFace API token")
-                    return
+                gen = ImageGenerator(token, output_dir="./outputs")
 
-                gen = ImageGenerator(api_token, "./outputs")
-
-                selected_model = list(MODELS.keys())[0]  # default model
-                model_id = MODELS[selected_model]
-
-                success, msg, image = gen.generate_image(prompt, model_id)
-
-                if not success:
-                    st.error(msg)
-                else:
-                    st.success("Image created!")
-
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-                    st.session_state.history.insert(0, {
-                        "img": image,
-                        "prompt": prompt,
-                        "model": selected_model,
-                        "ts": timestamp
-                    })
-
-                    st.session_state.count += 1
-
-                    st.markdown("<div class='result-card'>", unsafe_allow_html=True)
-                    st.image(image, use_container_width=True)
-                    st.markdown("</div>", unsafe_allow_html=True)
-
-                    # Download button
-                    st.download_button(
-                        "⬇️ Download Image",
-                        data=image_to_bytes(image),
-                        file_name=generate_filename(prompt, selected_model, timestamp),
-                        mime="image/png",
-                        use_container_width=True,
-                        key=f"main_dl_{timestamp}"
+                with st.spinner("Generating..."):
+                    success, message, pil_img = gen.generate_image(
+                        prompt=prompt,
+                        model_id=model_id,
+                        negative_prompt=neg_prompt or None,
+                        num_inference_steps=steps,
+                        guidance_scale=guidance,
+                        width=width,
+                        height=height,
+                        seed=seed if seed != 0 else None,
+                        init_image=init_image
                     )
 
-    # ---------------------------------------------------------
-    # RIGHT SIDE: SETTINGS
-    # ---------------------------------------------------------
-    with right:
+                if not success:
+                    st.error(message)
+                else:
+                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    st.session_state["history"].insert(0, {
+                        "img": pil_img,
+                        "prompt": prompt,
+                        "model": model_key,
+                        "ts": ts
+                    })
 
-        st.subheader("⚙️ Settings")
+                    st.markdown("<div class='card result'>", unsafe_allow_html=True)
+                    st.image(pil_img, use_column_width=True)
+                    st.write(message)
+                    st.download_button(
+                        "⬇️ Download PNG",
+                        image_to_bytes(pil_img),
+                        file_name=generate_filename(prompt, model_key, ts),
+                        mime="image/png"
+                    )
+                    st.markdown("</div>", unsafe_allow_html=True)
 
-        api_token = st.text_input(
-            "🔑 HuggingFace API Token",
-            type="password",
-            value=os.getenv("HUGGINGFACEHUB_API_TOKEN", "")
-        )
+with right:
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    st.subheader("Settings & Controls")
 
-        st.write("AI Model")
-        model = st.selectbox("Select Model", list(MODELS.keys()))
+    st.text_input("HuggingFace API token", key="hf_token", type="password")
 
-        st.markdown("---")
+    st.markdown("---")
+    st.write("Model Selection")
+    model_selection = st.selectbox("Choose model", list(MODELS.keys()), key="model")
 
-        st.write("📌 Example Prompt")
-        example = get_example_prompts()[0]  # Only 1 example
-        st.info(example)
+    model_id = MODELS[model_selection]
+    info = MODEL_INFO.get(model_id, {})
 
-        if st.button("Use Example Prompt", use_container_width=True):
-            st.session_state.temp_prompt = example
-            st.rerun()
+    st.markdown(f"**Model:** {model_id}")
+    st.markdown(
+        f"**License:** {info.get('license','-')}  \n"
+        f"**Status:** {info.get('status','-')}  \n"
+        f"**Description:** {info.get('description','-')}"
+    )
 
-        if "temp_prompt" in st.session_state:
-            prompt = st.session_state.temp_prompt
-            del st.session_state.temp_prompt
+    st.markdown("---")
+    st.subheader("Example Prompts")
 
+    st.selectbox("Choose example", get_example_prompts(), key="example_prompt")
+    st.button("Use example", on_click=set_example_prompt)
 
-    # ---------------------------------------------------------
-    # IMAGE HISTORY
-    # ---------------------------------------------------------
-    if st.session_state.history:
-        st.subheader("🖼️ Your Generated Images")
+    st.markdown("---")
+    st.caption("Images generated: " + str(len(st.session_state["history"])))
+    st.markdown("</div>", unsafe_allow_html=True)
 
-        cols = st.columns(2)
+# ----------------- Gallery -----------------
+if st.session_state["history"]:
+    st.markdown("---")
+    st.subheader("Your Gallery")
 
-        for index, data in enumerate(st.session_state.history):
-
-            with cols[index % 2]:
-                st.markdown("<div class='history-card'>", unsafe_allow_html=True)
-
-                st.image(data["img"], use_container_width=True)
-                st.caption(f"Prompt: {data['prompt'][:70]}...")
-                st.caption(f"Model: {data['model']}")
-
-                st.download_button(
-                    "⬇️ Download",
-                    data=image_to_bytes(data["img"]),
-                    file_name=generate_filename(data["prompt"], data["model"], data["ts"]),
-                    mime="image/png",
-                    use_container_width=True,
-                    key=f"hist_dl_{data['ts']}"
-                )
-
-                st.markdown("</div>", unsafe_allow_html=True)
-
-    # Footer
-    st.markdown("""
-    <div class="footer">
-        🚀 AI Image Studio • Crafted with ❤️ using Streamlit
-    </div>
-    """, unsafe_allow_html=True)
-
-
-# Run App
-if __name__ == "__main__":
-    main()
+    cols = st.columns(3)
+    for i, item in enumerate(st.session_state["history"]):
+        with cols[i % 3]:
+            st.markdown("<div class='card'>", unsafe_allow_html=True)
+            st.image(item["img"], use_column_width=True)
+            st.caption(item["prompt"][:80] + "...")
+            st.download_button(
+                "Download",
+                image_to_bytes(item["img"]),
+                file_name=generate_filename(item["prompt"], item["model"], item["ts"])
+            )
+            st.markdown("</div>", unsafe_allow_html=True)
